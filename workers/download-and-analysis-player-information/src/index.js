@@ -2,7 +2,6 @@ export default {
     async fetch(request, env, ctx) {
         const requestUrl = new URL(request.url);
 
-        console.log("test")
         // 1. 获取 URL 参数
         let targetUrl = requestUrl.searchParams.get("url");
         console.log(`url:${targetUrl}`)
