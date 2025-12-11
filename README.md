@@ -5,25 +5,45 @@
 ## Workers
 
 - **get-npb-schedule**: 获取 NPB 赛程的 Worker
+- **get-kbo-schedule**: 获取 KBO 赛程的 Worker
 - **download-and-analysis-player-information**: 下载和分析球员信息的 Worker
+- **search-player**: 搜索球员信息的 Worker
+- **baseball-miniprogram**: 棒球小程序 API Worker
 
 ## 项目结构
 
 ```
 cloudflare-worker/
 ├── package.json              # 根 package.json，包含所有脚本
-├── workers/                  # 所有 worker 的目录
-│   ├── get-npb-schedule/
-│   │   ├── wrangler.toml    # Worker 配置文件
-│   │   ├── package.json
-│   │   └── src/
-│   │       └── index.js     # Worker 代码
-│   └── download-and-analysis-player-information/
-│       ├── wrangler.toml
-│       ├── package.json
-│       └── src/
-│           └── index.js
-└── README.md
+├── tsconfig.json             # TypeScript 配置
+├── .gitignore
+├── README.md
+└── workers/                  # 所有 worker 的目录
+    ├── get-npb-schedule/
+    │   ├── wrangler.toml
+    │   ├── package.json
+    │   └── src/
+    │       └── index.js
+    ├── get-kbo-schedule/
+    │   ├── wrangler.toml
+    │   ├── package.json
+    │   └── src/
+    │       └── index.js
+    ├── download-and-analysis-player-information/
+    │   ├── wrangler.toml
+    │   ├── package.json
+    │   └── src/
+    │       └── index.js
+    ├── search-player/
+    │   ├── wrangler.toml
+    │   ├── package.json
+    │   └── src/
+    │       └── index.js
+    └── baseball-miniprogram/
+        ├── wrangler.toml
+        ├── package.json
+        └── src/
+            └── index.js
 ```
 
 ## 快速开始
@@ -39,11 +59,20 @@ npm install
 运行单个 worker：
 
 ```bash
-# 运行 get-npb-schedule
+# NPB 赛程
 npm run dev:npb-schedule
 
-# 运行 download-and-analysis-player-information
+# KBO 赛程
+npm run dev:kbo-schedule
+
+# 下载和分析球员信息
 npm run dev:player-info
+
+# 搜索球员
+npm run dev:search-player
+
+# 小程序 API
+npm run dev:miniprogram
 ```
 
 ### 3. 部署
@@ -51,11 +80,20 @@ npm run dev:player-info
 部署单个 worker：
 
 ```bash
-# 部署 get-npb-schedule
+# NPB 赛程
 npm run deploy:npb-schedule
 
-# 部署 download-and-analysis-player-information
+# KBO 赛程
+npm run deploy:kbo-schedule
+
+# 下载和分析球员信息
 npm run deploy:player-info
+
+# 搜索球员
+npm run deploy:search-player
+
+# 小程序 API
+npm run deploy:miniprogram
 ```
 
 部署所有 workers：

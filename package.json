@@ -8,10 +8,16 @@
   ],
   "scripts": {
     "dev:npb-schedule": "cd workers/get-npb-schedule && wrangler dev",
+    "dev:kbo-schedule": "cd workers/get-kbo-schedule && wrangler dev",
     "dev:player-info": "cd workers/download-and-analysis-player-information && wrangler dev",
+    "dev:search-player": "cd workers/search-player && wrangler dev",
+    "dev:miniprogram": "cd workers/baseball-miniprogram && wrangler dev",
     "deploy:npb-schedule": "cd workers/get-npb-schedule && wrangler deploy",
+    "deploy:kbo-schedule": "cd workers/get-kbo-schedule && wrangler deploy",
     "deploy:player-info": "cd workers/download-and-analysis-player-information && wrangler deploy",
-    "deploy:all": "npm run deploy:npb-schedule && npm run deploy:player-info"
+    "deploy:search-player": "cd workers/search-player && wrangler deploy",
+    "deploy:miniprogram": "cd workers/baseball-miniprogram && wrangler deploy",
+    "deploy:all": "npm run deploy:npb-schedule && npm run deploy:kbo-schedule && npm run deploy:player-info && npm run deploy:search-player && npm run deploy:miniprogram"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20231218.0",

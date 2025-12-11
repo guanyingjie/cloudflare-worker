@@ -2,7 +2,6 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
 
-        console.log("add test")
         // 1. 获取日期参数 (例如: 2024-5-1 或 2024-05-01)
         const dateParam = url.searchParams.get("date");
 
