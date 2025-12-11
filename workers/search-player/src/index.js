@@ -78,13 +78,13 @@ export default {
         // ----------------------------------------------------
         // 1. 尝试从缓存中获取结果
         // ----------------------------------------------------
-        // let cachedResponse = await cache.match(cacheKey);
+        let cachedResponse = await cache.match(cacheKey);
 
-        // if (cachedResponse) {
-        //   console.log(`[Cache] 命中缓存: ${name}`);
+        if (cachedResponse) {
+          console.log(`[Cache] 命中缓存: ${name}`);
 
-        //   return cachedResponse;
-        // }
+          return cachedResponse;
+        }
 
         // ----------------------------------------------------
         // 2. 缓存未命中，执行 API 查找
@@ -153,24 +153,46 @@ export default {
             console.log(`[Google API] 找到链接: ${finalPlayerUrl}`);
 
             let archiveUrl = null;
-            try {
-                const archiveApiUrl = `https://archive.org/wayback/available?url=${finalPlayerUrl}`;
-                const archiveRes = await fetch(archiveApiUrl, {
-                    headers: {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            let retryCount = 0;
+            const maxRetries = 1;
+            
+            // 获取 Archive URL，失败时重试一次
+            while (retryCount <= maxRetries && !archiveUrl) {
+                try {
+                    if (retryCount > 0) {
+                        console.log(`[Wayback Check] 重试第 ${retryCount} 次...`);
+                        // 重试前等待一小段时间
+                        await new Promise(resolve => setTimeout(resolve, 1000));
                     }
-                });
-                // const archiveRes = await fetch(archiveApiUrl);
-                console.log(`[Wayback Check] HTTP Status: ${archiveRes.status}`);
-                const archiveData = await archiveRes.json();
-                console.log(`[Wayback Check] API Raw Response: ${JSON.stringify(archiveData)}`);
-                if (archiveData.archived_snapshots && archiveData.archived_snapshots.closest) {
-                    archiveUrl = archiveData.archived_snapshots.closest.url;
+                    
+                    const archiveApiUrl = `https://archive.org/wayback/available?url=${finalPlayerUrl}`;
+                    const archiveRes = await fetch(archiveApiUrl, {
+                        headers: {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                        }
+                    });
+                    
+                    console.log(`[Wayback Check] HTTP Status: ${archiveRes.status} (尝试 ${retryCount + 1}/${maxRetries + 1})`);
+                    const archiveData = await archiveRes.json();
+                    console.log(`[Wayback Check] API Raw Response: ${JSON.stringify(archiveData)}`);
+                    
+                    if (archiveData.archived_snapshots && archiveData.archived_snapshots.closest) {
+                        archiveUrl = archiveData.archived_snapshots.closest.url;
+                        console.log(`[Wayback Check] 成功获取 Archive URL: ${archiveUrl}`);
+                    } else {
+                        console.log(`[Wayback Check] 未找到存档 (尝试 ${retryCount + 1}/${maxRetries + 1})`);
+                    }
+                } catch (e) {
+                    console.error(`[Wayback Check] 请求失败 (尝试 ${retryCount + 1}/${maxRetries + 1}):`, e);
+                    // 继续重试，不直接返回错误
                 }
-            } catch (e) {
-                console.error("Archive Check Failed:", e);
-                return new Response(JSON.stringify({ error: "Can't get archive link", details: e.message }), { status: 500, headers: corsHeaders });
-                // Archive 失败不影响主流程
+                
+                retryCount++;
+            }
+            
+            // 如果重试后仍然没有获取到 archiveUrl，记录日志但不影响主流程
+            if (!archiveUrl) {
+                console.warn(`[Wayback Check] 经过 ${maxRetries + 1} 次尝试后仍未找到存档`);
             }
 
             // 4. 返回成功结果
