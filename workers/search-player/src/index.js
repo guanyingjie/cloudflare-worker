@@ -60,6 +60,7 @@ export default {
         const params = url.searchParams;
         const name = params.get("name");
 
+        console.log("test")
         // 允许跨域
         const corsHeaders = {
             "content-type": "application/json;charset=UTF-8",
