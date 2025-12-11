@@ -1,0 +1,21 @@
+{
+  "name": "cloudflare-workers",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers Monorepo",
+  "private": true,
+  "workspaces": [
+    "workers/*"
+  ],
+  "scripts": {
+    "dev:npb-schedule": "cd workers/get-npb-schedule && wrangler dev",
+    "dev:player-info": "cd workers/download-and-analysis-player-information && wrangler dev",
+    "deploy:npb-schedule": "cd workers/get-npb-schedule && wrangler deploy",
+    "deploy:player-info": "cd workers/download-and-analysis-player-information && wrangler deploy",
+    "deploy:all": "npm run deploy:npb-schedule && npm run deploy:player-info"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20231218.0",
+    "wrangler": "^3.22.1"
+  }
+}
+

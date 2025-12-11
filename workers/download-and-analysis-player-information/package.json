@@ -1,0 +1,11 @@
+{
+  "name": "download-and-analysis-player-information",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for downloading and analyzing player information",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}
+

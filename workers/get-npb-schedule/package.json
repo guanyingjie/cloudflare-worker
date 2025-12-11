@@ -1,0 +1,11 @@
+{
+  "name": "get-npb-schedule",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for getting NPB schedule",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}
+
