@@ -9,7 +9,6 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
 
-        console.log("test")
         // 处理 CORS 预检
         if (request.method === 'OPTIONS') {
             return new Response(null, {
