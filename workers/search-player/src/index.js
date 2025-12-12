@@ -52,7 +52,7 @@ function convertToJapaneseKanji(text) {
 }
 
 // 缓存配置
-const CACHE_TTL_SECONDS = 60 * 60 * 24 * 30; // 缓存有效期：24小时
+const CACHE_TTL_SECONDS = 60 * 60 * 24 * 30; // 缓存有效期：30天
 
 export default {
     async fetch(request, env, ctx) {
@@ -60,7 +60,6 @@ export default {
         const params = url.searchParams;
         const name = params.get("name");
 
-        console.log("test")
         // 允许跨域
         const corsHeaders = {
             "content-type": "application/json;charset=UTF-8",
@@ -78,13 +77,12 @@ export default {
         // ----------------------------------------------------
         // 1. 尝试从缓存中获取结果
         // ----------------------------------------------------
-        let cachedResponse = await cache.match(cacheKey);
+        // let cachedResponse = await cache.match(cacheKey);
 
-        if (cachedResponse) {
-          console.log(`[Cache] 命中缓存: ${name}`);
-
-          return cachedResponse;
-        }
+        // if (cachedResponse) {
+        //     console.log(`[Cache] 命中缓存: ${name}`);
+        //     return cachedResponse;
+        // }
 
         // ----------------------------------------------------
         // 2. 缓存未命中，执行 API 查找
@@ -118,35 +116,24 @@ export default {
                     const rawUrl = item.link;
 
                     // 正则匹配 ID
-                    // 兼容: /player/12345, /keiyaku/p12345, /score/12345
-                    // 逻辑: 域名后 -> 任意路径 -> (可选p) -> 连续数字 -> (可选/)
                     const match = rawUrl.match(/kyureki\.com\/[a-z]+\/(?:p)?(\d+)\/?/);
 
                     if (match && match[1]) {
-                        // 找到了 ID！
                         const playerId = match[1];
-
-                        // 强制重组为标准档案页
                         finalPlayerUrl = `https://www.kyureki.com/player/${playerId}/`;
-                        rawFoundUrl = rawUrl; // 记录一下是从哪个链接提取的
-
+                        rawFoundUrl = rawUrl;
                         console.log(`[ID Extraction] Found ID ${playerId} in ${rawUrl} -> ${finalPlayerUrl}`);
-                        break; // 找到一个就收工，不再看后面的结果
+                        break;
                     }
                 }
             }
 
             if (!finalPlayerUrl) {
-                // 未找到结果的响应不应该缓存太久，避免短期内重复请求失败。
                 const notFoundResponse = new Response(JSON.stringify({
                     error: "未找到该球员",
                     source: "Google API",
                     details: "Google 收录中未找到匹配结果"
                 }), { status: 404, headers: corsHeaders });
-
-                // 可以选择缓存 404 响应，但设置较短的 TTL
-                // ctx.waitUntil(cache.put(cacheKey, notFoundResponse.clone(), { expirationTtl: 60 * 10 })); // 10分钟
-
                 return notFoundResponse;
             }
 
@@ -155,27 +142,26 @@ export default {
             let archiveUrl = null;
             let retryCount = 0;
             const maxRetries = 1;
-            
+
             // 获取 Archive URL，失败时重试一次
             while (retryCount <= maxRetries && !archiveUrl) {
                 try {
                     if (retryCount > 0) {
                         console.log(`[Wayback Check] 重试第 ${retryCount} 次...`);
-                        // 重试前等待一小段时间
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     }
-                    
+
                     const archiveApiUrl = `https://archive.org/wayback/available?url=${finalPlayerUrl}`;
                     const archiveRes = await fetch(archiveApiUrl, {
                         headers: {
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                         }
                     });
-                    
+
                     console.log(`[Wayback Check] HTTP Status: ${archiveRes.status} (尝试 ${retryCount + 1}/${maxRetries + 1})`);
                     const archiveData = await archiveRes.json();
                     console.log(`[Wayback Check] API Raw Response: ${JSON.stringify(archiveData)}`);
-                    
+
                     if (archiveData.archived_snapshots && archiveData.archived_snapshots.closest) {
                         archiveUrl = archiveData.archived_snapshots.closest.url;
                         console.log(`[Wayback Check] 成功获取 Archive URL: ${archiveUrl}`);
@@ -184,12 +170,11 @@ export default {
                     }
                 } catch (e) {
                     console.error(`[Wayback Check] 请求失败 (尝试 ${retryCount + 1}/${maxRetries + 1}):`, e);
-                    // 继续重试，不直接返回错误
                 }
-                
+
                 retryCount++;
             }
-            
+
             // 如果重试后仍然没有获取到 archiveUrl，记录日志但不影响主流程
             if (!archiveUrl) {
                 console.warn(`[Wayback Check] 经过 ${maxRetries + 1} 次尝试后仍未找到存档`);
@@ -204,22 +189,33 @@ export default {
                 extracted_from: rawFoundUrl,
                 has_archive: !!archiveUrl
             });
-            console.log(`success get archive url ${archiveUrl}`)
+            console.log(`Success, archive url: ${archiveUrl}`)
 
-            // 构造最终响应，并添加缓存头
+            // ----------------------------------------------------
+            // 5. 构造响应与缓存逻辑 (核心修改)
+            // ----------------------------------------------------
+
+            const responseHeaders = { ...corsHeaders };
+
+            // 只有当 archiveUrl 存在时，才设置长缓存头
+            if (archiveUrl) {
+                responseHeaders["Cache-Control"] = `public, max-age=${CACHE_TTL_SECONDS}`;
+            } else {
+                // 如果没有存档，设置禁止缓存，确保下次请求能再次尝试获取存档
+                responseHeaders["Cache-Control"] = "private, no-cache, no-store, must-revalidate";
+            }
+
             const finalResponse = new Response(responseBody, {
-                headers: {
-                    ...corsHeaders,
-                    // Worker 缓存控制头：缓存该响应 24 小时
-                    "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}`,
-                },
+                headers: responseHeaders,
             });
 
-            // ----------------------------------------------------
-            // 5. 异步将结果存入缓存
-            // ----------------------------------------------------
-            // 使用 ctx.waitUntil 确保缓存操作在 Worker 响应后继续完成
-            ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
+            // 只有当 archiveUrl 存在时，才写入 Cloudflare Cache
+            if (archiveUrl) {
+                ctx.waitUntil(cache.put(cacheKey, finalResponse.clone()));
+                console.log(`[Cache] 已写入缓存: ${name}`);
+            } else {
+                console.log(`[Cache] 跳过写入 (未找到 Archive URL): ${name}`);
+            }
 
             return finalResponse;
 
