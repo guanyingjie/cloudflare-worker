@@ -65,7 +65,7 @@ export default {
                     country: player.birthCountry,
                     age: player.currentAge,
                     birthDate: player.birthDate,
-                    height: player.height,
+                    height: convertHeightToCm(player.height), // "6' 8"" -> "203 cm"
                     weight: player.weight + " lbs",
                     position: player.primaryPosition?.name || "Unknown",
                     positionCode: player.primaryPosition?.abbreviation || "",
@@ -142,3 +142,24 @@ export default {
         }
     },
 };
+
+function convertHeightToCm(heightStr) {
+    if (!heightStr) return "";
+
+    // 使用正则提取英尺和英寸
+    // 匹配规则：数字 + ' + 可能的空格 + 数字 + "
+    const match = heightStr.match(/(\d+)'\s*(\d+)/);
+
+    if (match) {
+        const feet = parseInt(match[1], 10);
+        const inches = parseInt(match[2], 10);
+
+        // 计算总厘米数
+        const totalCm = (feet * 30.48) + (inches * 2.54);
+
+        // 四舍五入取整
+        return Math.round(totalCm) + " cm";
+    }
+
+    return heightStr; // 如果解析失败，返回原值
+}
