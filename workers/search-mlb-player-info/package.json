@@ -1,0 +1,11 @@
+{
+  "name": "search-mlb-player-info",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker for searching player information",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  }
+}
+
