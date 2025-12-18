@@ -1,110 +1,126 @@
-import * as cheerio from 'cheerio';
-
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
-        const targetDateStr = url.searchParams.get('date'); // e.g. 2024-10-18
 
-        if (!targetDateStr) {
-            return new Response(JSON.stringify({ error: 'Missing date param. e.g. ?date=2024-10-18' }), {
-                headers: { 'content-type': 'application/json' }
+        // 1. 获取参数: 默认查当天，或者传入 ?date=2024-04-01
+        // 注意：CPBL 接口要求日期格式为 "YYYY/MM/DD"
+        const inputDate = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
+        const targetDate = inputDate.replace(/-/g, '/'); // 将 2024-04-01 转为 2024/04/01
+
+        // =================================================
+        // 第一步：访问页面获取 CSRF Token 和 Cookie
+        // =================================================
+        const MAIN_PAGE_URL = 'https://cpbl.com.tw/schedule';
+        const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+
+        try {
+            const pageResponse = await fetch(MAIN_PAGE_URL, {
+                headers: { 'User-Agent': USER_AGENT }
             });
-        }
 
-        // Yahoo 运动的赛程 URL 格式
-        const yahooUrl = `https://tw.sports.yahoo.com/cpbl/scoreboard/?date=${targetDateStr}`;
-
-        // --- 缓存逻辑 ---
-        const cache = caches.default;
-        const cacheKey = new Request(yahooUrl, { method: 'GET' });
-        let response = await cache.match(cacheKey);
-
-        if (!response) {
-            console.log(`Fetching Yahoo CPBL: ${yahooUrl}`);
-            response = await fetch(yahooUrl, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            });
-            if (response.ok) {
-                response = new Response(response.body, response);
-                response.headers.append('Cache-Control', 's-maxage=600');
-                ctx.waitUntil(cache.put(cacheKey, response.clone()));
+            if (!pageResponse.ok) {
+                throw new Error('CPBL Homepage unavailable');
             }
-        }
 
-        const html = await response.text();
-        const $ = cheerio.load(html);
-        const matches = [];
+            // 提取 Cookie
+            const setCookieHeader = pageResponse.headers.get('set-cookie');
 
-        // --- 解析 Yahoo 运动的 HTML 结构 ---
-        // Yahoo 的赛程列表通常在一个特定的容器里，我们需要找到包含比赛信息的卡片
-        // 注意：类名可能会变，建议用相对稳定的选择器
+            // 提取 Token
+            const htmlText = await pageResponse.text();
+            const tokenMatch = htmlText.match(/<input name="__RequestVerificationToken" type="hidden" value="([^"]+)"/);
 
-        // 查找所有的比赛卡片 (通常是 li 标签或者特定的 div)
-        // 观察 Yahoo 结构，通常比赛卡片在 .GamesList 或者是 .Scoreboard 相关的 class 下
-        // 下面是一个基于常见 Yahoo 结构的解析尝试：
+            if (!tokenMatch || !setCookieHeader) {
+                throw new Error('Failed to get security token');
+            }
 
-        $('li.game-card').each((i, el) => {
-            // 提取队伍
-            // 结构通常是: .Team--away .name 和 .Team--home .name
-            const awayTeam = $(el).find('[class*="Team--away"] [class*="name"]').text().trim();
-            const homeTeam = $(el).find('[class*="Team--home"] [class*="name"]').text().trim();
+            const verificationToken = tokenMatch[1];
 
-            // 提取比分
-            const awayScore = $(el).find('[class*="Team--away"] [class*="score"]').text().trim();
-            const homeScore = $(el).find('[class*="Team--home"] [class*="score"]').text().trim();
+            // =================================================
+            // 第二步：请求数据接口
+            // =================================================
+            const API_URL = 'https://cpbl.com.tw/schedule/getgamedatas';
 
-            // 提取状态 (例如 "已结束", "17:05", "延赛")
-            const statusText = $(el).find('[class*="status"]').text().trim();
+            const bodyParams = new URLSearchParams();
+            bodyParams.append('calendar', targetDate);
+            bodyParams.append('location', '');
+            bodyParams.append('kindCode', 'A'); // A: 一军例行赛
 
-            // 提取场地 (Yahoo 有时会在副标题显示场地，如果没有可忽略)
-            const location = $(el).find('[class*="venue"]').text().trim() || "未知场地";
+            const apiResponse = await fetch(API_URL, {
+                method: 'POST',
+                headers: {
+                    'User-Agent': USER_AGENT,
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'Referer': MAIN_PAGE_URL,
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Cookie': setCookieHeader,
+                    'RequestVerificationToken': verificationToken
+                },
+                body: bodyParams
+            });
 
-            // 只有当至少抓到了队伍名才算有效数据
-            if (awayTeam && homeTeam) {
+            if (!apiResponse.ok) {
+                throw new Error(`CPBL API Error: ${apiResponse.status}`);
+            }
 
-                let status = 'Scheduled';
-                if (statusText.includes('結束') || statusText.includes('Final')) {
-                    status = 'Final';
-                } else if (statusText.includes('延賽')) {
-                    status = 'Postponed';
-                } else if (statusText.includes(':')) {
-                    // 如果显示的是时间 (如 18:35)，说明是未开始
-                    status = 'Scheduled';
-                } else {
-                    status = 'Live'; // 其他情况可能是在进行中
-                }
+            const rawData = await apiResponse.json();
 
-                matches.push({
-                    game_id: `yahoo-${i}`, // Yahoo 不一定直接暴露 ID，用索引暂代
-                    status: status,
-                    status_text: statusText, // 保留原始状态文本以备参考
-                    location: location,
-                    away: { team: awayTeam, score: awayScore || '0' },
-                    home: { homeTeam, score: homeScore || '0' }
+            // =================================================
+            // 第三步：数据清洗 (清洗核心逻辑)
+            // =================================================
+
+            // 检查 rawData 是否为数组，CPBL 有时候查无数据会返回空数组或特殊结构
+            if (!Array.isArray(rawData)) {
+                return new Response(JSON.stringify({ message: "No games found or format changed", raw: rawData }), {
+                    headers: { 'Content-Type': 'application/json' }
                 });
             }
-        });
 
-        // 如果 Yahoo 结构大改导致抓不到 (fallback)
-        if (matches.length === 0) {
-            // 尝试另一种常见的 Yahoo 列表选择器
-            $('[class*="Scoreboard"] [class*="GameItem"]').each((i, el) => {
-                // 这里填入备用的解析逻辑，原理同上
+            const cleanedSchedule = rawData.map(game => {
+                // 判断比赛是否已经有比分
+                // 逻辑：如果 HomeScore 或 AwayScore 是 null/空字符串，说明比赛未开始或未结束
+                const hasScore = (game.HomeScore !== null && game.HomeScore !== "") &&
+                    (game.AwayScore !== null && game.AwayScore !== "");
+
+                return {
+                    // 1. 比赛时间 (组合日期和时间)
+                    dateTime: `${game.GameDate} ${game.GameTime}`, // e.g. "2024/04/03 18:35"
+                    displayTime: game.GameTime, // e.g. "18:35"
+
+                    // 2. 球队名称
+                    home: game.HomeTeamName, // 主队
+                    away: game.AwayTeamName, // 客队
+
+                    // 3. 场地 (额外附赠，通常很有用)
+                    place: game.Location,
+
+                    // 4. 比分处理
+                    // 如果有比分则返回数字，如果没有则返回 null，方便前端判断是用 "vs" 还是显示数字
+                    score: hasScore ? {
+                        home: parseInt(game.HomeScore),
+                        away: parseInt(game.AwayScore)
+                    } : null,
+
+                    // 状态 (用于辅助前端判断，比如 '延赛' 等)
+                    status: game.GameStatus // 通常 'F' 代表结束，但不完全准确，依赖 score 判断最直观
+                };
+            });
+
+            // =================================================
+            // 第四步：返回给小程序
+            // =================================================
+            return new Response(JSON.stringify(cleanedSchedule), {
+                headers: {
+                    'Content-Type': 'application/json;charset=UTF-8',
+                    'Access-Control-Allow-Origin': '*', // 允许小程序跨域
+                    'Cache-Control': 'public, max-age=300' // 缓存 5 分钟
+                }
+            });
+
+        } catch (e) {
+            return new Response(JSON.stringify({ error: e.message }), {
+                status: 500,
+                headers: { 'Content-Type': 'application/json' }
             });
         }
-
-        return new Response(JSON.stringify({
-            query_date: targetDateStr,
-            data_source: 'Yahoo Sports TW',
-            count: matches.length,
-            matches: matches
-        }, null, 2), {
-            headers: {
-                'content-type': 'application/json;charset=UTF-8',
-                'Access-Control-Allow-Origin': '*'
-            },
-        });
     },
 };
