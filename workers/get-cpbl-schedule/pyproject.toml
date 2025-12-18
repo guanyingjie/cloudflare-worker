@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "cpbl-schedule-scraper"
+version = "0.1.0"
+description = "Auto fetch CPBL game schedule for WeChat Miniprogram"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+requests = "^2.31.0"
+
+[tool.poetry.group.dev.dependencies]
+# 这里可以放开发工具，比如代码格式化工具，生产环境不需要
+black = "^24.3.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
