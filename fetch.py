@@ -6,7 +6,7 @@ import os
 # ==========================================
 # 输入与输出文件名
 INPUT_FILE_NAME = "raw_response.json"
-OUTPUT_FILE_NAME = "cleaned_result.json"
+OUTPUT_FILE_NAME = "workers/get-cpbl-schedule/src/cleaned_result.json"
 
 # 需要提取的字段列表
 TARGET_FIELDS = [
