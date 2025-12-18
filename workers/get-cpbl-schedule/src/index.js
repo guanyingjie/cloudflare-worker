@@ -2,122 +2,102 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
 
-        // 1. 获取参数: 默认查当天，或者传入 ?date=2024-04-01
-        // 注意：CPBL 接口要求日期格式为 "YYYY/MM/DD"
+        // 1. 获取参数 (例如 ?date=2024-04-01)
+        // 如果没传，默认用今天
         const inputDate = url.searchParams.get('date') || new Date().toISOString().slice(0, 10);
-        const targetDate = inputDate.replace(/-/g, '/'); // 将 2024-04-01 转为 2024/04/01
+
+        // 解析日期：将 "2024-04-01" 拆分为 year="2024", month="04"
+        const [year, month] = inputDate.split('-');
 
         // =================================================
-        // 第一步：访问页面获取 CSRF Token 和 Cookie
+        // 核心修改：改用 GET 请求，直接带上查询参数
         // =================================================
-        const MAIN_PAGE_URL = 'https://cpbl.com.tw/schedule';
-        const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36';
+        // GameType=01 代表一军例行赛
+        // IsLookUp=1 是官网查询时必然带的参数
+        const CPBL_API_URL = `https://cpbl.com.tw/schedule/getgamedatas?GameYear=${year}&GameMonth=${month}&GameType=01&IsLookUp=1`;
+
+        const headers = {
+            // 必须伪装 Referer，告诉服务器我是从赛程页点过来的
+            'Referer': 'https://cpbl.com.tw/schedule',
+            // 必须伪装 User-Agent，防止被当成爬虫
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+            // 告诉服务器这是一个 AJAX 请求
+            'X-Requested-With': 'XMLHttpRequest',
+            // 接受 JSON
+            'Accept': 'application/json, text/javascript, */*; q=0.01'
+        };
 
         try {
-            const pageResponse = await fetch(MAIN_PAGE_URL, {
-                headers: { 'User-Agent': USER_AGENT }
+            const response = await fetch(CPBL_API_URL, {
+                method: 'GET', // 显式使用 GET
+                headers: headers
             });
 
-            if (!pageResponse.ok) {
-                throw new Error('CPBL Homepage unavailable');
+            if (!response.ok) {
+                // 如果这里还报错，我们会把具体的 HTTP 状态码打印出来方便调试
+                // 比如 403 就是被封了，500 是对方服务器炸了
+                throw new Error(`CPBL API Blocked or Error: ${response.status} ${response.statusText}`);
             }
 
-            // 提取 Cookie
-            const setCookieHeader = pageResponse.headers.get('set-cookie');
-
-            // 提取 Token
-            const htmlText = await pageResponse.text();
-            const tokenMatch = htmlText.match(/<input name="__RequestVerificationToken" type="hidden" value="([^"]+)"/);
-
-            if (!tokenMatch || !setCookieHeader) {
-                throw new Error('Failed to get security token');
-            }
-
-            const verificationToken = tokenMatch[1];
+            const rawData = await response.json();
 
             // =================================================
-            // 第二步：请求数据接口
-            // =================================================
-            const API_URL = 'https://cpbl.com.tw/schedule/getgamedatas';
-
-            const bodyParams = new URLSearchParams();
-            bodyParams.append('calendar', targetDate);
-            bodyParams.append('location', '');
-            bodyParams.append('kindCode', 'A'); // A: 一军例行赛
-
-            const apiResponse = await fetch(API_URL, {
-                method: 'POST',
-                headers: {
-                    'User-Agent': USER_AGENT,
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'Referer': MAIN_PAGE_URL,
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Cookie': setCookieHeader,
-                    'RequestVerificationToken': verificationToken
-                },
-                body: bodyParams
-            });
-
-            if (!apiResponse.ok) {
-                throw new Error(`CPBL API Error: ${apiResponse.status}`);
-            }
-
-            const rawData = await apiResponse.json();
-
-            // =================================================
-            // 第三步：数据清洗 (清洗核心逻辑)
+            // 数据清洗逻辑
             // =================================================
 
-            // 检查 rawData 是否为数组，CPBL 有时候查无数据会返回空数组或特殊结构
+            // 容错处理：有时候官网查不到会返回空，或者结构不对
             if (!Array.isArray(rawData)) {
-                return new Response(JSON.stringify({ message: "No games found or format changed", raw: rawData }), {
+                return new Response(JSON.stringify([]), {
                     headers: { 'Content-Type': 'application/json' }
                 });
             }
 
             const cleanedSchedule = rawData.map(game => {
-                // 判断比赛是否已经有比分
-                // 逻辑：如果 HomeScore 或 AwayScore 是 null/空字符串，说明比赛未开始或未结束
+                // 判断是否已有比分
                 const hasScore = (game.HomeScore !== null && game.HomeScore !== "") &&
                     (game.AwayScore !== null && game.AwayScore !== "");
 
                 return {
-                    // 1. 比赛时间 (组合日期和时间)
-                    dateTime: `${game.GameDate} ${game.GameTime}`, // e.g. "2024/04/03 18:35"
-                    displayTime: game.GameTime, // e.g. "18:35"
+                    // 球队
+                    home: game.HomeTeamName,
+                    away: game.AwayTeamName,
 
-                    // 2. 球队名称
-                    home: game.HomeTeamName, // 主队
-                    away: game.AwayTeamName, // 客队
+                    // 时间
+                    date: game.GameDate, // "2024/04/03"
+                    time: game.GameTime, // "18:35"
 
-                    // 3. 场地 (额外附赠，通常很有用)
+                    // 场地
                     place: game.Location,
 
-                    // 4. 比分处理
-                    // 如果有比分则返回数字，如果没有则返回 null，方便前端判断是用 "vs" 还是显示数字
+                    // 比分 (只在有分时返回数字)
                     score: hasScore ? {
                         home: parseInt(game.HomeScore),
                         away: parseInt(game.AwayScore)
                     } : null,
 
-                    // 状态 (用于辅助前端判断，比如 '延赛' 等)
-                    status: game.GameStatus // 通常 'F' 代表结束，但不完全准确，依赖 score 判断最直观
+                    // 比赛状态
+                    status: game.GameStatus
                 };
             });
 
             // =================================================
-            // 第四步：返回给小程序
+            // 返回结果
             // =================================================
             return new Response(JSON.stringify(cleanedSchedule), {
                 headers: {
                     'Content-Type': 'application/json;charset=UTF-8',
-                    'Access-Control-Allow-Origin': '*', // 允许小程序跨域
-                    'Cache-Control': 'public, max-age=300' // 缓存 5 分钟
+                    'Access-Control-Allow-Origin': '*',
+                    // 缓存 10 分钟，减轻官网压力
+                    'Cache-Control': 'public, max-age=600'
                 }
             });
 
         } catch (e) {
-            return new Response(JSON.stringify({ error: e.message }), {
+            // 打印详细错误，方便我们在 Worker 后台 Log 里看
+            return new Response(JSON.stringify({
+                error: e.message,
+                hint: "Trying to access CPBL directly via GET failed."
+            }), {
                 status: 500,
                 headers: { 'Content-Type': 'application/json' }
             });
