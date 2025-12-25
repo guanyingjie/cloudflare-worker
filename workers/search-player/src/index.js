@@ -2,10 +2,6 @@
  * Cloudflare Worker: Kyureki Finder (Google API Edition) - 增加缓存功能
  */
 
-// 🔴 必须替换这里的内容 🔴
-const GOOGLE_API_KEY = "AIzaSyB_ClNsdqcSQTykK7qVNyIccDWDIbC4bTs";
-const GOOGLE_CX_ID = "e5d247b3ac13f4d63";
-
 // 🎯 精选人名映射表 (仅保留人名常用字，约120个)
 const CN_JP_MAP = {
     // --- 顶级高频 (姓氏/名字核心字) ---
@@ -59,6 +55,8 @@ export default {
         const params = url.searchParams;
         const name = params.get("name");
 
+        const fetchLatest = params.get("fetchLatest") === "true";
+
         const corsHeaders = {
             "content-type": "application/json;charset=UTF-8",
             "Access-Control-Allow-Origin": "*"
@@ -99,7 +97,7 @@ export default {
             console.log(`[Search] ${name} -> ${searchName}`);
 
             try {
-                const googleApiUrl = `https://www.googleapis.com/customsearch/v1?key=${GOOGLE_API_KEY}&cx=${GOOGLE_CX_ID}&q=${encodeURIComponent(searchName)}&num=1`;
+                const googleApiUrl = `https://www.googleapis.com/customsearch/v1?key=${env.GOOGLE_API_KEY}&cx=${env.GOOGLE_CX_ID}&q=${encodeURIComponent(searchName)}&num=1`;
                 console.log(`Google API URL: ${googleApiUrl}`);
                 const googleRes = await fetch(googleApiUrl);
 
@@ -159,6 +157,60 @@ export default {
                 source: "Google API",
                 details: "Google 收录中未找到匹配结果"
             }), { status: 404, headers: corsHeaders });
+        }
+
+        if (fetchLatest) {
+            console.log(`[Save] 触发主动存档: ${finalPlayerUrl}`);
+
+            // 检查环境变量是否配置
+            if (!env.S3_ACCESS_KEY || !env.S3_SECRET_KEY) {
+                return new Response(JSON.stringify({
+                    error: "Configuration Error",
+                    details: "S3_ACCESS_KEY or S3_SECRET_KEY not set in Worker variables"
+                }), { status: 500, headers: corsHeaders });
+            }
+
+            try {
+                // 构造 POST 表单数据
+                const formData = new URLSearchParams();
+                formData.append('url', finalPlayerUrl);
+                // 可选：添加 capture_all=1 抓取页面相关资源，或 capture_outlinks=1
+                // formData.append('capture_all', '1');
+
+                const saveRes = await fetch("https://web.archive.org/save/", {
+                    method: "POST",
+                    headers: {
+                        "Accept": "application/json",
+                        "Authorization": `LOW ${env.S3_ACCESS_KEY}:${env.S3_SECRET_KEY}`,
+                        "Content-Type": "application/x-www-form-urlencoded"
+                    },
+                    body: formData
+                });
+
+                // 处理返回结果
+                const saveStatus = saveRes.status;
+                let saveData = {};
+                try {
+                    saveData = await saveRes.json();
+                } catch(e) {
+                    saveData = { raw: await saveRes.text() };
+                }
+
+                return new Response(JSON.stringify({
+                    action: "save_snapshot",
+                    status: saveRes.ok ? "success" : "failed",
+                    http_code: saveStatus,
+                    target_url: finalPlayerUrl,
+                    archive_response: saveData,
+                    source: isFromCache ? "Cloudflare Cache" : "Google API"
+                }), { status: saveRes.ok ? 200 : 502, headers: corsHeaders });
+
+            } catch (e) {
+                return new Response(JSON.stringify({
+                    error: "Save API Error",
+                    details: e.message
+                }), { status: 500, headers: corsHeaders });
+            }
         }
 
         // ----------------------------------------------------
