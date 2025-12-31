@@ -172,10 +172,11 @@ export default {
             }
 
             console.log(`[Step 2] Scraping success. HTML Length: ${htmlContent.length}`);
+            const cleanedHtml = await cleanWithRewriter(htmlContent);
 
             return new Response(JSON.stringify({
                 status: "success",
-                html: htmlContent,
+                html: cleanedHtml,
                 source: finalPlayerUrl
             }), {
                 headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
@@ -218,4 +219,39 @@ async function fetchPlayerHtml(targetUrl, apiKey) {
 
     // 返回 HTML 文本
     return await response.text();
+}
+
+async function cleanWithRewriter(html) {
+    let output = "";
+
+    // 创建一个转换器
+    const rewriter = new HTMLRewriter()
+        // 1. 移除不需要的标签
+        .on("script, style, svg, nav, footer, header, iframe, link, meta", {
+            element(element) {
+                element.remove();
+            }
+        })
+        // 2. 针对所有元素，移除干扰属性
+        .on("*", {
+            element(element) {
+                // 移除所有 class 和 style
+                element.removeAttribute("class");
+                element.removeAttribute("style");
+                element.removeAttribute("id");
+                element.removeAttribute("data-bs-toggle"); // 你例子里的属性
+                element.removeAttribute("onclick");
+                // 如果需要，可以保留 href, colspan 等
+            }
+        });
+
+    // HTMLRewriter 设计用于处理 Response 流，所以我们需要 trick 一下
+    const res = new Response(html);
+    const transformedRes = rewriter.transform(res);
+
+    // 获取转换后的文本
+    let text = await transformedRes.text();
+
+    // 压缩空白
+    return text.replace(/\s+/g, " ").trim();
 }
