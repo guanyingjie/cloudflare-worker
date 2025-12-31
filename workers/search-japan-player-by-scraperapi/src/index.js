@@ -222,36 +222,52 @@ async function fetchPlayerHtml(targetUrl, apiKey) {
 }
 
 async function cleanWithRewriter(html) {
-    let output = "";
-
-    // 创建一个转换器
+    // 1. 定义 Rewriter：移除干扰标签和属性
     const rewriter = new HTMLRewriter()
-        // 1. 移除不需要的标签
-        .on("script, style, svg, nav, footer, header, iframe, link, meta", {
+        // 移除无用标签
+        .on("script, style, svg, nav, footer, header, iframe, link, meta, noscript", {
             element(element) {
                 element.remove();
-            }
+            },
         })
-        // 2. 针对所有元素，移除干扰属性
+        // 移除占空间的属性 (HTMLRewriter 不支持通配符删除，只能指定名字)
         .on("*", {
             element(element) {
-                // 移除所有 class 和 style
                 element.removeAttribute("class");
                 element.removeAttribute("style");
                 element.removeAttribute("id");
-                element.removeAttribute("data-bs-toggle"); // 你例子里的属性
+                element.removeAttribute("data-bs-toggle");
                 element.removeAttribute("onclick");
-                // 如果需要，可以保留 href, colspan 等
-            }
+                element.removeAttribute("aria-label");
+                element.removeAttribute("role");
+                // 保留 colspan, rowspan, href, src 以维持表格结构和链接
+            },
         });
 
-    // HTMLRewriter 设计用于处理 Response 流，所以我们需要 trick 一下
+    // 2. 执行转换并获取文本
     const res = new Response(html);
     const transformedRes = rewriter.transform(res);
-
-    // 获取转换后的文本
     let text = await transformedRes.text();
 
-    // 压缩空白
-    return text.replace(/\s+/g, " ").trim();
+    // 3. 压缩空白 (将连续的换行和空格变成一个空格)
+    // 这是减小体积最关键的一步
+    text = text.replace(/\s+/g, " ").trim();
+
+    // ============================================================
+    // 4. 截取前 10% 的内容
+    // ============================================================
+    // 逻辑：计算清洗后文本长度，取 10% 的切片
+    const limit = Math.floor(text.length * 0.05);
+
+    // 安全检查：如果 10% 太短（比如小于 1000 字），可能连基本信息都没了
+    // 建议设置一个“保底长度”，例如至少保留 2000 字符
+    const safeLimit = Math.max(limit, 2000);
+
+    // 执行截取
+    const finalContent = text.substring(0, safeLimit);
+
+    console.log(`Cleaned Full Size: ${text.length}`);
+    console.log(`Truncated Size (10%): ${finalContent.length}`);
+
+    return finalContent;
 }
