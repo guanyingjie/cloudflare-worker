@@ -47,7 +47,8 @@ function convertToJapaneseKanji(text) {
 }
 
 // 缓存配置
-const CACHE_TTL_SECONDS = 60 * 60 * 24 * 365; // 缓存有效期：1年
+const CACHE_TTL_SECONDS = 60 * 60 * 24 * 365; // URL缓存有效期：1年
+const PLAYER_INFO_CACHE_TTL = 60 * 60 * 24 * 30; // playerInfo缓存有效期：30天
 
 export default {
     async fetch(request, env, ctx) {
@@ -152,10 +153,24 @@ export default {
         }
 
         // ============================================================
-        // STEP 2: 调用爬虫脚本获取 HTML，提取球员信息
+        // STEP 2: 检查 playerInfo 缓存，或爬取并提取球员信息
         // ============================================================
+        
+        // 使用 finalPlayerUrl 作为 playerInfo 的缓存 key
+        const playerInfoCacheKey = new Request(finalPlayerUrl, { method: 'GET' });
+        
+        // 尝试从缓存获取 playerInfo
+        let cachedPlayerInfo = await cache.match(playerInfoCacheKey);
+        if (cachedPlayerInfo) {
+            console.log(`[Cache] 命中 playerInfo 缓存: ${finalPlayerUrl}`);
+            const playerInfoData = await cachedPlayerInfo.json();
+            return new Response(JSON.stringify(playerInfoData), {
+                headers: corsHeaders
+            });
+        }
+
         try {
-            console.log(`[Step 2] Start scraping: ${finalPlayerUrl}`);
+            console.log(`[Step 2] playerInfo 缓存未命中，开始爬取: ${finalPlayerUrl}`);
 
             const htmlContent = await fetchPlayerHtml(finalPlayerUrl, env.SCRAPER_API_KEY);
 
@@ -167,6 +182,16 @@ export default {
 
             // 提取球员信息
             const playerInfo = extractPlayerInfo(htmlContent);
+
+            // 将 playerInfo 写入缓存
+            const playerInfoResponse = new Response(JSON.stringify(playerInfo), {
+                headers: {
+                    "Content-Type": "application/json",
+                    "Cache-Control": `public, max-age=${PLAYER_INFO_CACHE_TTL}`,
+                }
+            });
+            ctx.waitUntil(cache.put(playerInfoCacheKey, playerInfoResponse));
+            console.log(`[Cache] playerInfo 已写入缓存: ${finalPlayerUrl}`);
 
             return new Response(JSON.stringify(playerInfo), {
                 headers: corsHeaders
