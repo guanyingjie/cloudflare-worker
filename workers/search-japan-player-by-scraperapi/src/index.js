@@ -165,8 +165,8 @@ export default {
 
             console.log(`[Step 2] Scraping success. HTML Length: ${htmlContent.length}`);
 
-            // 提取球员信息并翻译
-            const playerInfo = await extractPlayerInfo(htmlContent);
+            // 提取球员信息
+            const playerInfo = extractPlayerInfo(htmlContent);
 
             return new Response(JSON.stringify(playerInfo), {
                 headers: corsHeaders
@@ -259,7 +259,7 @@ function extractDatasObject(scriptContent) {
 // ============================================================
 // 第三步：解析数据并映射到输出结构
 // ============================================================
-async function extractPlayerInfo(html) {
+function extractPlayerInfo(html) {
     // Step 1: 提取 Vue 脚本
     const vueScript = extractVueScript(html);
     if (!vueScript) {
@@ -282,8 +282,8 @@ async function extractPlayerInfo(html) {
         throw new Error(`解析 datas 对象失败: ${e.message}`);
     }
 
-    // Step 4: 映射到输出结构并翻译
-    return await mapToPlayerInfo(data);
+    // Step 4: 映射到输出结构
+    return mapToPlayerInfo(data);
 }
 
 // ============================================================
@@ -350,8 +350,7 @@ function convertSingleToDoubleQuotes(str) {
                 if (str[i] === '\\' && i + 1 < str.length) {
                     // 处理转义
                     if (str[i + 1] === "'") {
-                        // \' 转换为 '（在双引号字符串中不需要转义
-                        // 单引号）
+                        // \' 转换为 '（在双引号字符串中不需要转义单引号）
                         result += "'";
                         i += 2;
                     } else if (str[i + 1] === '"') {
@@ -387,41 +386,10 @@ function convertSingleToDoubleQuotes(str) {
 }
 
 // ============================================================
-// Google Apps Script 翻译 API
+// 映射函数：将 kyureki 数据映射到输出格式
 // ============================================================
-const TRANSLATE_API_URL = "https://script.google.com/macros/s/AKfycbwJso2uCoUGvc7AYefSTx_ymeJBk4afqv-a8OcQhuDV5LX1CZXuO8e7sIqK8GhiA97eoA/exec";
-
-async function translateWithGoogle(text) {
-    if (!text || text.trim() === '') return '';
-    
-    try {
-        const url = `${TRANSLATE_API_URL}?q=${encodeURIComponent(text)}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-            console.log(`[Translate] Failed for: ${text.substring(0, 50)}...`);
-            return text; // 翻译失败返回原文
-        }
-        const translated = await res.text();
-        console.log(`[Translate] ${text.substring(0, 30)} -> ${translated.substring(0, 30)}`);
-        return translated;
-    } catch (e) {
-        console.log(`[Translate] Error: ${e.message}`);
-        return text; // 出错返回原文
-    }
-}
-
-// 批量翻译数组
-async function translateArray(arr) {
-    if (!arr || arr.length === 0) return [];
-    const results = await Promise.all(arr.map(item => translateWithGoogle(item)));
-    return results;
-}
-
-// ============================================================
-// 映射函数：将 kyureki 数据映射到输出格式（含翻译）
-// ============================================================
-async function mapToPlayerInfo(data) {
-    // 基本信息提取（原始日文）
+function mapToPlayerInfo(data) {
+    // 基本信息提取
     const name = data.name || '';
     const team = data.kyudan || ''; // 当前所属球队
     const generation = data.generation || ''; // 出生世代
@@ -495,58 +463,29 @@ async function mapToPlayerInfo(data) {
     // 总结 - 使用 gpt_text
     const summary = data.gpt_text || '';
 
-    // ============================================================
-    // 并行翻译所有需要翻译的字段
-    // ============================================================
-    console.log('[Translate] Starting batch translation...');
-    
-    const [
-        teamTranslated,
-        positionTranslated,
-        elementaryTranslated,
-        middleSchoolTranslated,
-        highSchoolTranslated,
-        universityTranslated,
-        professionalTranslated,
-        summaryTranslated,
-        honorsTranslated
-    ] = await Promise.all([
-        translateWithGoogle(team),
-        translateWithGoogle(position),
-        translateWithGoogle(elementary),
-        translateWithGoogle(middleSchool),
-        translateWithGoogle(highSchool),
-        translateWithGoogle(university),
-        translateWithGoogle(professional),
-        translateWithGoogle(summary),
-        translateArray(honors)
-    ]);
-
-    console.log('[Translate] Translation completed.');
-
     return {
         "姓名": name,
         "数据源确认": name ? "是" : "否",
         "基本资料": {
-            "所属": teamTranslated,
+            "所属": team,
             "出生世代": generation,
             "投打": throwBat,
             "身高": height,
             "体重": weight,
-            "位置": positionTranslated,
+            "位置": position,
             "最速": fastball,
             "一垒到达速度": runSpeed,
             "全垒打": homerun
         },
         "棒球经历": {
-            "小学": elementaryTranslated,
-            "中学": middleSchoolTranslated,
-            "高中": highSchoolTranslated,
-            "大学": universityTranslated,
-            "社会人/职业": professionalTranslated,
-            "代表队或主要荣誉": honorsTranslated.length > 0 ? honorsTranslated : ""
+            "小学": elementary,
+            "中学": middleSchool,
+            "高中": highSchool,
+            "大学": university,
+            "社会人/职业": professional,
+            "代表队或主要荣誉": honors.length > 0 ? honors : ""
         },
-        "总结": summaryTranslated
+        "总结": summary
     };
 }
 
