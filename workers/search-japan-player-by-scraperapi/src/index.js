@@ -1,5 +1,5 @@
 /**
- * Cloudflare Worker: Kyureki Finder (Google API Edition) - 提取球员信息版本
+ * Cloudflare Worker: Kyureki Finder (Yahoo Japan Edition) - 提取球员信息版本
  */
 
 // 🎯 精选人名映射表 (仅保留人名常用字，约120个)
@@ -87,39 +87,51 @@ export default {
         }
 
         // ----------------------------------------------------
-        // 2. 如果缓存没命中（或者无效），执行 Google API 查找
+        // 2. 如果缓存没命中（或者无效），执行 Yahoo Japan 搜索
         // ----------------------------------------------------
         if (!finalPlayerUrl) {
-            console.log(`[Cache] 未命中，执行 Google API 搜索: ${name}`);
+            console.log(`[Cache] 未命中，执行 Yahoo Japan 搜索: ${name}`);
             const searchName = convertToJapaneseKanji(name);
             console.log(`[Search] ${name} -> ${searchName}`);
 
             try {
-                const googleApiUrl = `https://www.googleapis.com/customsearch/v1?key=${env.GOOGLE_API_KEY}&cx=${env.GOOGLE_CX_ID}&q=${encodeURIComponent(searchName)}&num=1`;
-                console.log(`Google API URL: ${googleApiUrl}`);
-                const googleRes = await fetch(googleApiUrl);
+                // 构造精确搜索的 Query，通过 Yahoo Japan 搜索
+                const query = `site:kyureki.com ${searchName}`;
+                const yahooUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(query)}`;
 
-                if (!googleRes.ok) {
-                    const errText = await googleRes.text();
-                    console.error("Google API Error:", errText);
-                    return new Response(JSON.stringify({ error: "Search Service Error", details: "API Key配置错误或额度耗尽" }), { status: 500, headers: corsHeaders });
+                // 通过 ScraperAPI 代理请求，使用日本 IP
+                const scraperParams = new URLSearchParams({
+                    api_key: env.SCRAPER_API_KEY,
+                    url: yahooUrl,
+                    country_code: "jp",
+                });
+                const scraperUrl = `http://api.scraperapi.com?${scraperParams.toString()}`;
+                console.log(`[Search] Yahoo Japan URL (via ScraperAPI): ${yahooUrl}`);
+
+                const searchRes = await fetch(scraperUrl, {
+                    method: "GET",
+                    headers: {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
+                    }
+                });
+
+                if (!searchRes.ok) {
+                    const errText = await searchRes.text();
+                    console.error("Yahoo Japan Search Error:", errText);
+                    return new Response(JSON.stringify({ error: "Search Service Error", details: "ScraperAPI 请求失败或额度耗尽" }), { status: 500, headers: corsHeaders });
                 }
 
-                const data = await googleRes.json();
+                // 将 HTML 中的 URL 编码进行解码（搜索引擎经常把真实链接编码）
+                const rawHtml = await searchRes.text();
+                const htmlContent = decodeURIComponent(rawHtml);
 
-                if (data.items && data.items.length > 0) {
-                    for (const item of data.items) {
-                        const rawUrl = item.link;
-                        // 正则匹配 ID
-                        const match = rawUrl.match(/kyureki\.com\/[a-z]+\/(?:p)?(\d+)\/?/);
-                        if (match && match[1]) {
-                            const playerId = match[1];
-                            finalPlayerUrl = `https://www.kyureki.com/player/${playerId}/`;
-                            rawFoundUrl = rawUrl;
-                            console.log(`[ID Extraction] Found ID ${playerId} in ${rawUrl} -> ${finalPlayerUrl}`);
-                            break;
-                        }
-                    }
+                // 使用正则在解码后的 HTML 中匹配 kyureki 球员 ID
+                const match = htmlContent.match(/kyureki\.com\/[a-z]+\/(?:p)?(\d+)\/?/);
+                if (match && match[1]) {
+                    const playerId = match[1];
+                    finalPlayerUrl = `https://www.kyureki.com/player/${playerId}/`;
+                    console.log(`[ID Extraction] Found ID ${playerId} -> ${finalPlayerUrl}`);
                 }
 
                 // ============================================
@@ -147,8 +159,8 @@ export default {
         if (!finalPlayerUrl) {
             return new Response(JSON.stringify({
                 error: "未找到该球员",
-                source: "Google API",
-                details: "Google 收录中未找到匹配结果"
+                source: "Yahoo Japan",
+                details: "Yahoo Japan 搜索中未找到匹配结果"
             }), { status: 404, headers: corsHeaders });
         }
 
