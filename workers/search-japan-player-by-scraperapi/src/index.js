@@ -123,8 +123,11 @@ export default {
                 }
 
                 // 将 HTML 中的 URL 编码进行解码（搜索引擎经常把真实链接编码）
+                // 使用安全解码：逐段解码 %XX 序列，遇到非法序列则保留原样（等同于 Python 的 urllib.parse.unquote）
                 const rawHtml = await searchRes.text();
-                const htmlContent = decodeURIComponent(rawHtml);
+                const htmlContent = rawHtml.replace(/(%[0-9A-Fa-f]{2})+/g, (match) => {
+                    try { return decodeURIComponent(match); } catch (_) { return match; }
+                });
 
                 // 使用正则在解码后的 HTML 中匹配 kyureki 球员 ID
                 const match = htmlContent.match(/kyureki\.com\/[a-z]+\/(?:p)?(\d+)\/?/);
