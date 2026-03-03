@@ -47,8 +47,9 @@ function convertToJapaneseKanji(text) {
 }
 
 // 缓存配置
-const CACHE_TTL_SECONDS = 60 * 60 * 24 * 365; // URL缓存有效期：1年
-const PLAYER_INFO_CACHE_TTL = 60 * 60 * 24 * 30; // playerInfo缓存有效期：30天
+const URL_CACHE_TTL = 60 * 60 * 24 * 365;   // URL 缓存有效期：1年
+const PLAYER_INFO_CACHE_TTL = 60 * 60 * 24 * 30; // playerInfo 缓存有效期：30天
+const DIRECT_FETCH_TIMEOUT_MS = 3000; // 直连超时：3秒（超时则 fallback ScraperAPI）
 
 export default {
     async fetch(request, env, ctx) {
@@ -65,29 +66,25 @@ export default {
             return new Response(JSON.stringify({ error: "请提供 name 参数" }), { status: 400, headers: corsHeaders });
         }
 
-        const cacheKey = new Request(url.toString(), request);
-        const cache = caches.default;
+        // KV 缓存键
+        const urlCacheKey = `url:${name}`;
+        const kv = env.PLAYER_CACHE;
 
         let finalPlayerUrl = null;
-        let rawFoundUrl = null;
-        let isFromCache = false;
 
         // ----------------------------------------------------
-        // 1. 尝试从缓存中获取 finalPlayerUrl
+        // 1. 尝试从 KV 缓存获取 finalPlayerUrl
         // ----------------------------------------------------
-        let cachedResponse = await cache.match(cacheKey);
-
-        if (cachedResponse) {
-            const cachedUrl = await cachedResponse.text();
+        if (kv) {
+            const cachedUrl = await kv.get(urlCacheKey);
             if (cachedUrl && cachedUrl.startsWith('http')) {
                 finalPlayerUrl = cachedUrl;
-                isFromCache = true;
-                console.log(`[Cache] 命中缓存，获取到 URL: ${finalPlayerUrl}`);
+                console.log(`[KV Cache] 命中 URL 缓存: ${finalPlayerUrl}`);
             }
         }
 
         // ----------------------------------------------------
-        // 2. 如果缓存没命中（或者无效），执行 Yahoo Japan 搜索
+        // 2. 缓存未命中，执行 Yahoo Japan 搜索
         // ----------------------------------------------------
         if (!finalPlayerUrl) {
             console.log(`[Cache] 未命中，执行 Yahoo Japan 搜索: ${name}`);
@@ -95,15 +92,15 @@ export default {
             console.log(`[Search] ${name} -> ${searchName}`);
 
             try {
-                // 构造精确搜索的 Query，通过 Yahoo Japan 搜索
                 const query = `site:kyureki.com ${searchName}`;
                 const yahooUrl = `https://search.yahoo.co.jp/search?p=${encodeURIComponent(query)}`;
 
-                // 通过 ScraperAPI 代理请求，使用日本 IP
+                // 🚀 方案2: 通过 ScraperAPI 代理，添加 render=false 禁用 JS 渲染加速
                 const scraperParams = new URLSearchParams({
                     api_key: env.SCRAPER_API_KEY,
                     url: yahooUrl,
                     country_code: "jp",
+                    render: "false",
                 });
                 const scraperUrl = `http://api.scraperapi.com?${scraperParams.toString()}`;
                 console.log(`[Search] Yahoo Japan URL (via ScraperAPI): ${yahooUrl}`);
@@ -122,14 +119,11 @@ export default {
                     return new Response(JSON.stringify({ error: "Search Service Error", details: "ScraperAPI 请求失败或额度耗尽" }), { status: 500, headers: corsHeaders });
                 }
 
-                // 将 HTML 中的 URL 编码进行解码（搜索引擎经常把真实链接编码）
-                // 使用安全解码：逐段解码 %XX 序列，遇到非法序列则保留原样（等同于 Python 的 urllib.parse.unquote）
                 const rawHtml = await searchRes.text();
                 const htmlContent = rawHtml.replace(/(%[0-9A-Fa-f]{2})+/g, (match) => {
                     try { return decodeURIComponent(match); } catch (_) { return match; }
                 });
 
-                // 使用正则在解码后的 HTML 中匹配 kyureki 球员 ID
                 const match = htmlContent.match(/kyureki\.com\/[a-z]+\/(?:p)?(\d+)\/?/);
                 if (match && match[1]) {
                     const playerId = match[1];
@@ -137,18 +131,10 @@ export default {
                     console.log(`[ID Extraction] Found ID ${playerId} -> ${finalPlayerUrl}`);
                 }
 
-                // ============================================
-                // 3. 将找到的 finalPlayerUrl 写入缓存
-                // ============================================
-                if (finalPlayerUrl) {
-                    const urlResponse = new Response(finalPlayerUrl, {
-                        headers: {
-                            "Content-Type": "text/plain",
-                            "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}`,
-                        }
-                    });
-                    ctx.waitUntil(cache.put(cacheKey, urlResponse));
-                    console.log(`[Cache] 新 URL 已写入缓存: ${finalPlayerUrl}`);
+                // 🚀 方案3: 将 URL 写入 KV 持久缓存
+                if (finalPlayerUrl && kv) {
+                    ctx.waitUntil(kv.put(urlCacheKey, finalPlayerUrl, { expirationTtl: URL_CACHE_TTL }));
+                    console.log(`[KV Cache] URL 已写入 KV: ${finalPlayerUrl}`);
                 }
 
             } catch (e) {
@@ -157,7 +143,7 @@ export default {
         }
 
         // ----------------------------------------------------
-        // 4. 如果最终还是没有 URL，返回 404
+        // 3. 如果最终没有 URL，返回 404
         // ----------------------------------------------------
         if (!finalPlayerUrl) {
             return new Response(JSON.stringify({
@@ -170,23 +156,21 @@ export default {
         // ============================================================
         // STEP 2: 检查 playerInfo 缓存，或爬取并提取球员信息
         // ============================================================
-        
-        // 使用 finalPlayerUrl 作为 playerInfo 的缓存 key
-        const playerInfoCacheKey = new Request(finalPlayerUrl, { method: 'GET' });
-        
-        // 尝试从缓存获取 playerInfo
-        let cachedPlayerInfo = await cache.match(playerInfoCacheKey);
-        if (cachedPlayerInfo) {
-            console.log(`[Cache] 命中 playerInfo 缓存: ${finalPlayerUrl}`);
-            const playerInfoData = await cachedPlayerInfo.json();
-            return new Response(JSON.stringify(playerInfoData), {
-                headers: corsHeaders
-            });
+        const playerInfoCacheKey = `playerInfo:${finalPlayerUrl}`;
+
+        // 🚀 方案3: 从 KV 获取 playerInfo 缓存
+        if (kv) {
+            const cachedPlayerInfo = await kv.get(playerInfoCacheKey, "json");
+            if (cachedPlayerInfo) {
+                console.log(`[KV Cache] 命中 playerInfo 缓存: ${finalPlayerUrl}`);
+                return new Response(JSON.stringify(cachedPlayerInfo), { headers: corsHeaders });
+            }
         }
 
         try {
             console.log(`[Step 2] playerInfo 缓存未命中，开始爬取: ${finalPlayerUrl}`);
 
+            // 🚀 方案1+2: 先直连，失败再 fallback ScraperAPI (render=false)
             const htmlContent = await fetchPlayerHtml(finalPlayerUrl, env.SCRAPER_API_KEY);
 
             if (!htmlContent || htmlContent.length < 100) {
@@ -195,22 +179,15 @@ export default {
 
             console.log(`[Step 2] Scraping success. HTML Length: ${htmlContent.length}`);
 
-            // 提取球员信息
             const playerInfo = extractPlayerInfo(htmlContent);
 
-            // 将 playerInfo 写入缓存
-            const playerInfoResponse = new Response(JSON.stringify(playerInfo), {
-                headers: {
-                    "Content-Type": "application/json",
-                    "Cache-Control": `public, max-age=${PLAYER_INFO_CACHE_TTL}`,
-                }
-            });
-            ctx.waitUntil(cache.put(playerInfoCacheKey, playerInfoResponse));
-            console.log(`[Cache] playerInfo 已写入缓存: ${finalPlayerUrl}`);
+            // 🚀 方案3: 将 playerInfo 写入 KV 持久缓存
+            if (kv) {
+                ctx.waitUntil(kv.put(playerInfoCacheKey, JSON.stringify(playerInfo), { expirationTtl: PLAYER_INFO_CACHE_TTL }));
+                console.log(`[KV Cache] playerInfo 已写入 KV: ${finalPlayerUrl}`);
+            }
 
-            return new Response(JSON.stringify(playerInfo), {
-                headers: corsHeaders
-            });
+            return new Response(JSON.stringify(playerInfo), { headers: corsHeaders });
 
         } catch (error) {
             return new Response(JSON.stringify({ error: "提取失败", details: error.message }), { status: 500, headers: corsHeaders });
@@ -530,15 +507,50 @@ function mapToPlayerInfo(data) {
 }
 
 // ============================================================
-// ScraperAPI 抓取函数
+// 🚀 方案1: 直连优先 + ScraperAPI Fallback 抓取函数
 // ============================================================
 async function fetchPlayerHtml(targetUrl, apiKey) {
+    // --- 第一步：尝试直接请求（Cloudflare Worker 全球边缘节点，可能直连成功） ---
+    try {
+        console.log(`[Fetch] 尝试直连: ${targetUrl}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), DIRECT_FETCH_TIMEOUT_MS);
+
+        const directResponse = await fetch(targetUrl, {
+            method: "GET",
+            signal: controller.signal,
+            headers: {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "ja,en-US;q=0.9,en;q=0.8"
+            }
+        });
+        clearTimeout(timeoutId);
+
+        if (directResponse.ok) {
+            const text = await directResponse.text();
+            // 验证返回的是有效的球员页面（包含 Vue 数据）
+            if (text.includes('new Vue') && text.includes('datas:')) {
+                console.log(`[Fetch] ✅ 直连成功! HTML Length: ${text.length}`);
+                return text;
+            }
+            console.log(`[Fetch] 直连返回内容无效（无 Vue 数据），回退 ScraperAPI`);
+        } else {
+            console.log(`[Fetch] 直连失败 (HTTP ${directResponse.status})，回退 ScraperAPI`);
+        }
+    } catch (e) {
+        console.log(`[Fetch] 直连异常 (${e.message})，回退 ScraperAPI`);
+    }
+
+    // --- 第二步：Fallback 到 ScraperAPI ---
+    console.log(`[Fetch] 使用 ScraperAPI 抓取: ${targetUrl}`);
     const scraperApiEndpoint = "http://api.scraperapi.com";
 
+    // 🚀 方案2: 添加 render=false 禁用 JS 渲染，大幅加速
     const params = new URLSearchParams({
         api_key: apiKey,
         url: targetUrl,
-        country_code: "jp", // 强制日本 IP 绕过 Geo-blocking
+        country_code: "jp",
+        render: "false",
     });
 
     const fullUrl = `${scraperApiEndpoint}?${params.toString()}`;
@@ -546,7 +558,7 @@ async function fetchPlayerHtml(targetUrl, apiKey) {
     const response = await fetch(fullUrl, {
         method: "GET",
         headers: {
-            "User-Agent": "Cloudflare-Worker-Scraper/1.0"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
     });
 
