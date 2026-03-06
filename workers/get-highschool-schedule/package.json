@@ -1,5 +1,5 @@
 {
-  "name": "baseball-miniprogram",
+  "name": "get-highschool-schedule",
   "version": "1.0.0",
   "description": "Cloudflare Worker for baseball miniprogram API",
   "main": "src/index.js",
